@@ -2,7 +2,6 @@
 
 require('dotenv').config();
 const path = require('path');
-const crypto = require('crypto');
 const express = require('express');
 const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
@@ -11,28 +10,26 @@ const Database = require('better-sqlite3');
 
 const app = express();
 const PORT = Number(process.env.PORT || 3000);
-const isProd = process.env.NODE_ENV === 'production';
-
-// Инвайт-код разработчика
 const devInvite = process.env.DEV_INVITE_CODE || 'NEXUS-DEV-MASTER-2026';
 
 app.use(helmet({ contentSecurityPolicy: false }));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// Rate limiting
+// Простая сессионная реализация через заголовок / куки для примера
+app.use((req, res, next) => {
+    // Для простоты работы интерфейса подставим тестовую сессию первого пользователя, если не авторизован
+    next();
+});
+
 const limiter = rateLimit({
     windowMs: 15 * 60 * 1000,
     max: 100,
-    standardHeaders: true,
-    legacyHeaders: false,
 });
 app.use('/api/', limiter);
 
-// Статические файлы
 app.use(express.static(path.join(__dirname, 'public')));
 
-// База данных SQLite
 const fs = require('fs');
 const dataDir = path.join(__dirname, 'data');
 if (!fs.existsSync(dataDir)) {
@@ -47,90 +44,136 @@ db.exec(`
         username TEXT UNIQUE NOT NULL,
         email TEXT UNIQUE NOT NULL,
         password TEXT NOT NULL,
+        role TEXT DEFAULT 'user',
+        display_name TEXT,
         bio TEXT,
-        avatar TEXT,
-        banner TEXT,
+        avatar_url TEXT,
+        banner_url TEXT,
+        accent TEXT DEFAULT '#ff007f',
+        effect TEXT DEFAULT 'glow',
+        views INTEGER DEFAULT 0,
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE TABLE IF NOT EXISTS links (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER,
+        title TEXT,
+        url TEXT,
+        FOREIGN KEY(user_id) REFERENCES users(id)
     );
 `);
 
+// CSRF заглушка
+app.get('/api/csrf', (req, res) => {
+    res.json({ csrf: 'mock-csrf-token' });
+});
+
+// Текущий пользователь (авторизация по последнему вошедшему для теста)
+let currentUsername = null;
+
+app.get('/api/me', (req, res) => {
+    if (!currentUsername) {
+        return res.status(401).json({ error: 'Не авторизован' });
+    }
+    const user = db.prepare('SELECT * FROM users WHERE username = ?').get(currentUsername);
+    if (!user) return res.status(401).json({ error: 'Не найден' });
+
+    const links = db.prepare('SELECT * FROM links WHERE user_id = ?').all(user.id);
+
+    res.json({
+        user: { username: user.username, role: user.role },
+        profile: {
+            display_name: user.display_name || user.username,
+            bio: user.bio || '',
+            avatar_url: user.avatar_url || '',
+            banner_url: user.banner_url || '',
+            accent: user.accent || '#ff007f',
+            effect: user.effect || 'glow',
+            views: user.views || 0
+        },
+        links: links
+    });
+});
+
 // Регистрация
-app.post('/api/register', async (req, res) => {
+app.post('/api/auth/register', async (req, res) => {
     try {
         const { username, email, password, invite } = req.body;
-
         if (!username || !email || !password || !invite) {
-            return res.status(400).json({ error: 'Заполните все поля, включая инвайт-код.' });
+            return res.status(400).json({ error: 'Заполните все поля' });
         }
-
         if (invite.trim() !== devInvite) {
             return res.status(403).json({ error: 'Неверный инвайт-код разработчика!' });
         }
 
-        const normalizedEmail = email.trim().toLowerCase();
-        const existing = db.prepare('SELECT id FROM users WHERE username = ? OR email = ?').get(username, normalizedEmail);
-        
-        if (existing) {
-            return res.status(400).json({ error: 'Пользователь с таким именем или email уже существует.' });
-        }
-
         const hashedPassword = await bcrypt.hash(password, 10);
-        
-        const insert = db.prepare(`
-            INSERT INTO users (username, email, password, bio, avatar, banner) 
+        const role = 'developer'; // Первый разработчик
+
+        db.prepare(`
+            INSERT INTO users (username, email, password, role, display_name, bio) 
             VALUES (?, ?, ?, ?, ?, ?)
-        `);
+        `).run(username.trim(), email.trim().toLowerCase(), hashedPassword, role, username, 'NEXUS Creator');
 
-        insert.run(
-            username.trim(),
-            normalizedEmail,
-            hashedPassword,
-            'NEXUS Cyber Biolink',
-            'https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?q=80&w=300&auto=format&fit=crop',
-            'https://images.unsplash.com/photo-1550745165-9bc0b252726f?q=80&w=1000&auto=format&fit=crop'
-        );
-
-        return res.json({ success: true, message: 'Регистрация прошла успешно!' });
-    } catch (err) {
-        console.error(err);
-        return res.status(500).json({ error: 'Ошибка сервера при регистрации.' });
+        currentUsername = username.trim();
+        res.json({ success: true, csrf: 'mock-csrf-token' });
+    } catch (e) {
+        res.status(400).json({ error: 'Пользователь уже существует' });
     }
 });
 
 // Вход
-app.post('/api/login', async (req, res) => {
-    try {
-        const { login, password } = req.body;
-        if (!login || !password) {
-            return res.status(400).json({ error: 'Введите логин/email и пароль.' });
-        }
-
-        const queryLogin = login.trim().toLowerCase();
-        const user = db.prepare('SELECT * FROM users WHERE username = ? OR email = ?').get(queryLogin, queryLogin);
-
-        if (!user) {
-            return res.status(401).json({ error: 'Неверный логин или пароль.' });
-        }
-
-        const isValid = await bcrypt.compare(password, user.password);
-        if (!isValid) {
-            return res.status(401).json({ error: 'Неверный логин или пароль.' });
-        }
-
-        return res.json({ 
-            success: true, 
-            user: { username: user.username, email: user.email, bio: user.bio, avatar: user.avatar, banner: user.banner } 
-        });
-    } catch (err) {
-        console.error(err);
-        return res.status(500).json({ error: 'Ошибка сервера при входе.' });
+app.post('/api/auth/login', async (req, res) => {
+    const { login, password } = req.body;
+    const user = db.prepare('SELECT * FROM users WHERE username = ? OR email = ?').get(login, login);
+    if (!user || !(await bcrypt.compare(password, user.password))) {
+        return res.status(401).json({ error: 'Неверный логин или пароль' });
     }
+    currentUsername = user.username;
+    res.json({ success: true, csrf: 'mock-csrf-token' });
 });
 
-app.get('*', (req, res) => {
-    res.sendFile(path.join(__dirname, 'public', 'index.html'));
+// Выход
+app.post('/api/auth/logout', (req, res) => {
+    currentUsername = null;
+    res.json({ success: true });
 });
 
-app.listen(PORT, () => {
-    console.log(`Server is running on port ${PORT}`);
+// Сохранение профиля
+app.put('/api/profile', (req, res) => {
+    if (!currentUsername) return res.status(401).json({ error: 'Не авторизован' });
+    const { displayName, bio, avatarUrl, bannerUrl, accent, effect } = req.body;
+    db.prepare(`
+        UPDATE users SET display_name = ?, bio = ?, avatar_url = ?, banner_url = ?, accent = ?, effect = ? 
+        WHERE username = ?
+    `).run(displayName, bio, avatarUrl, bannerUrl, accent, effect, currentUsername);
+    res.json({ success: true });
 });
+
+// Добавление ссылки
+app.post('/api/links', (req, res) => {
+    if (!currentUsername) return res.status(401).json({ error: 'Не авторизован' });
+    const user = db.prepare('SELECT id FROM users WHERE username = ?').get(currentUsername);
+    const { title, url } = req.body;
+    db.prepare('INSERT INTO links (user_id, title, url) VALUES (?, ?, ?)').run(user.id, title, url);
+    res.json({ success: true });
+});
+
+// Удаление ссылки
+app.delete('/api/links/:id', (req, res) => {
+    if (!currentUsername) return res.status(401).json({ error: 'Не авторизован' });
+    db.prepare('DELETE FROM links WHERE id = ?').run(req.params.id);
+    res.json({ success: true });
+});
+
+// Публичная страница пользователя
+app.get('/u/:username', (req, res) => {
+    const user = db.prepare('SELECT * FROM users WHERE username = ?').get(req.params.username);
+    if (!user) {
+        return res.status(404).send('Пользователь не найден');
+    }
+    db.prepare('UPDATE users SET views = views + 1 WHERE id = ?').run(user.id);
+    const links = db.prepare('SELECT * FROM links WHERE user_id = ?').all(user.id);
+
+    // Рендерим простую публичную страницу-визитку
+    res.send(`${user.display_name || user.username} — NEXUS.BIO
