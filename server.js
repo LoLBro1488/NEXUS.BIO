@@ -16,9 +16,7 @@ app.use(helmet({ contentSecurityPolicy: false }));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// Простая сессионная реализация через заголовок / куки для примера
 app.use((req, res, next) => {
-    // Для простоты работы интерфейса подставим тестовую сессию первого пользователя, если не авторизован
     next();
 });
 
@@ -64,12 +62,10 @@ db.exec(`
     );
 `);
 
-// CSRF заглушка
 app.get('/api/csrf', (req, res) => {
     res.json({ csrf: 'mock-csrf-token' });
 });
 
-// Текущий пользователь (авторизация по последнему вошедшему для теста)
 let currentUsername = null;
 
 app.get('/api/me', (req, res) => {
@@ -96,7 +92,6 @@ app.get('/api/me', (req, res) => {
     });
 });
 
-// Регистрация
 app.post('/api/auth/register', async (req, res) => {
     try {
         const { username, email, password, invite } = req.body;
@@ -108,7 +103,7 @@ app.post('/api/auth/register', async (req, res) => {
         }
 
         const hashedPassword = await bcrypt.hash(password, 10);
-        const role = 'developer'; // Первый разработчик
+        const role = 'developer';
 
         db.prepare(`
             INSERT INTO users (username, email, password, role, display_name, bio) 
@@ -122,7 +117,6 @@ app.post('/api/auth/register', async (req, res) => {
     }
 });
 
-// Вход
 app.post('/api/auth/login', async (req, res) => {
     const { login, password } = req.body;
     const user = db.prepare('SELECT * FROM users WHERE username = ? OR email = ?').get(login, login);
@@ -133,13 +127,11 @@ app.post('/api/auth/login', async (req, res) => {
     res.json({ success: true, csrf: 'mock-csrf-token' });
 });
 
-// Выход
 app.post('/api/auth/logout', (req, res) => {
     currentUsername = null;
     res.json({ success: true });
 });
 
-// Сохранение профиля
 app.put('/api/profile', (req, res) => {
     if (!currentUsername) return res.status(401).json({ error: 'Не авторизован' });
     const { displayName, bio, avatarUrl, bannerUrl, accent, effect } = req.body;
@@ -150,7 +142,6 @@ app.put('/api/profile', (req, res) => {
     res.json({ success: true });
 });
 
-// Добавление ссылки
 app.post('/api/links', (req, res) => {
     if (!currentUsername) return res.status(401).json({ error: 'Не авторизован' });
     const user = db.prepare('SELECT id FROM users WHERE username = ?').get(currentUsername);
@@ -159,14 +150,12 @@ app.post('/api/links', (req, res) => {
     res.json({ success: true });
 });
 
-// Удаление ссылки
 app.delete('/api/links/:id', (req, res) => {
     if (!currentUsername) return res.status(401).json({ error: 'Не авторизован' });
     db.prepare('DELETE FROM links WHERE id = ?').run(req.params.id);
     res.json({ success: true });
 });
 
-// Публичная страница пользователя
 app.get('/u/:username', (req, res) => {
     const user = db.prepare('SELECT * FROM users WHERE username = ?').get(req.params.username);
     if (!user) {
@@ -175,5 +164,4 @@ app.get('/u/:username', (req, res) => {
     db.prepare('UPDATE users SET views = views + 1 WHERE id = ?').run(user.id);
     const links = db.prepare('SELECT * FROM links WHERE user_id = ?').all(user.id);
 
-    // Рендерим простую публичную страницу-визитку
     res.send(`${user.display_name || user.username} — NEXUS.BIO
