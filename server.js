@@ -16,14 +16,9 @@ app.use(helmet({ contentSecurityPolicy: false }));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-app.use((req, res, next) => {
-    next();
-});
+app.use((req, res, next) => next());
 
-const limiter = rateLimit({
-    windowMs: 15 * 60 * 1000,
-    max: 100,
-});
+const limiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 100 });
 app.use('/api/', limiter);
 
 app.use(express.static(path.join(__dirname, 'public')));
@@ -62,21 +57,15 @@ db.exec(`
     );
 `);
 
-app.get('/api/csrf', (req, res) => {
-    res.json({ csrf: 'mock-csrf-token' });
-});
+app.get('/api/csrf', (req, res) => res.json({ csrf: 'mock-csrf-token' }));
 
 let currentUsername = null;
 
 app.get('/api/me', (req, res) => {
-    if (!currentUsername) {
-        return res.status(401).json({ error: 'Не авторизован' });
-    }
+    if (!currentUsername) return res.status(401).json({ error: 'Не авторизован' });
     const user = db.prepare('SELECT * FROM users WHERE username = ?').get(currentUsername);
     if (!user) return res.status(401).json({ error: 'Не найден' });
-
     const links = db.prepare('SELECT * FROM links WHERE user_id = ?').all(user.id);
-
     res.json({
         user: { username: user.username, role: user.role },
         profile: {
@@ -95,21 +84,13 @@ app.get('/api/me', (req, res) => {
 app.post('/api/auth/register', async (req, res) => {
     try {
         const { username, email, password, invite } = req.body;
-        if (!username || !email || !password || !invite) {
-            return res.status(400).json({ error: 'Заполните все поля' });
-        }
-        if (invite.trim() !== devInvite) {
-            return res.status(403).json({ error: 'Неверный инвайт-код разработчика!' });
-        }
+        if (!username || !email || !password || !invite) return res.status(400).json({ error: 'Заполните все поля' });
+        if (invite.trim() !== devInvite) return res.status(403).json({ error: 'Неверный инвайт-код разработчика!' });
 
         const hashedPassword = await bcrypt.hash(password, 10);
-        const role = 'developer';
-
-        db.prepare(`
-            INSERT INTO users (username, email, password, role, display_name, bio) 
-            VALUES (?, ?, ?, ?, ?, ?)
-        `).run(username.trim(), email.trim().toLowerCase(), hashedPassword, role, username, 'NEXUS Creator');
-
+        db.prepare('INSERT INTO users (username, email, password, role, display_name, bio) VALUES (?, ?, ?, ?, ?, ?)').run(
+            username.trim(), email.trim().toLowerCase(), hashedPassword, 'developer', username, 'NEXUS Creator'
+        );
         currentUsername = username.trim();
         res.json({ success: true, csrf: 'mock-csrf-token' });
     } catch (e) {
@@ -135,10 +116,9 @@ app.post('/api/auth/logout', (req, res) => {
 app.put('/api/profile', (req, res) => {
     if (!currentUsername) return res.status(401).json({ error: 'Не авторизован' });
     const { displayName, bio, avatarUrl, bannerUrl, accent, effect } = req.body;
-    db.prepare(`
-        UPDATE users SET display_name = ?, bio = ?, avatar_url = ?, banner_url = ?, accent = ?, effect = ? 
-        WHERE username = ?
-    `).run(displayName, bio, avatarUrl, bannerUrl, accent, effect, currentUsername);
+    db.prepare('UPDATE users SET display_name = ?, bio = ?, avatar_url = ?, banner_url = ?, accent = ?, effect = ? WHERE username = ?').run(
+        displayName, bio, avatarUrl, bannerUrl, accent, effect, currentUsername
+    );
     res.json({ success: true });
 });
 
@@ -158,10 +138,6 @@ app.delete('/api/links/:id', (req, res) => {
 
 app.get('/u/:username', (req, res) => {
     const user = db.prepare('SELECT * FROM users WHERE username = ?').get(req.params.username);
-    if (!user) {
-        return res.status(404).send('Пользователь не найден');
-    }
+    if (!user) return res.status(404).send('Пользователь не найден');
     db.prepare('UPDATE users SET views = views + 1 WHERE id = ?').run(user.id);
-    const links = db.prepare('SELECT * FROM links WHERE user_id = ?').all(user.id);
-
-    res.send(`${user.display_name || user.username} — NEXUS.BIO
+    res.send(`
