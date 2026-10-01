@@ -1,6 +1,17 @@
-NODE_ENV=development
-PORT=3000
-DATABASE_URL=postgresql://USER:PASSWORD@HOST:5432/DATABASE?sslmode=require
-DATABASE_SSL=true
-SESSION_SECRET=replace-with-a-long-random-secret
-OWNER_INVITE_CODE=replace-with-the-owner-invite-code
+{
+  "name": "nexus-bio",
+  "version": "1.0.0",
+  "description": "Secure Biolink Platform",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "bcryptjs": "^2.4.3",
+    "better-sqlite3": "^11.8.1",
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2",
+    "express-rate-limit": "^7.5.0",
+    "helmet": "^8.0.0"
+  }
+}
